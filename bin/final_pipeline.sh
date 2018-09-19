@@ -66,6 +66,8 @@ function define_paths(){
 	contigs_norna=$outdir/intermediate_contigs/$prefix.nochrm.norna.fasta
 	contigs_nophylomark=$outdir/intermediate_contigs/$prefix.nochrm.norna.nophylomark.fasta
 	predicted_proteins=$outdir/protein_prediction/$prefix.predicted_proteins.faa 
+	contigs_learning=$outdir/intermediate_contigs/$prefix.nochrm.norna.nophylomark.learning.fasta 
+	contigs_circular=$outdir/intermediate_contigs/$prefix.circular.fasta
 		
 }	
 
@@ -73,7 +75,8 @@ function complete_resume(){
 	name=$1
 	nb_contigs=$2
 	length_contigs=$3	
-	echo -e "$name\t$nb_contigs\t$length_contigs" >> $resume 
+	path=$4
+	echo -e "$name\t$nb_contigs\t$length_contigs\t$path" >> $resume 
 }	
 
 function verif_blast_db(){
@@ -154,6 +157,7 @@ function run_phylo_markers_search(){
 	echo "[phylo_search] Run Hmmer..." 
 	hmmsearch --tblout $out.tsv -E 1e-5 $phylo_db $predicted_proteins > $out
 	treat_hmm $out
+	echo "[phylo_search] Delete phylogenetic markers contigs..." 
 	python3 $BIN/delete_seq_from_file.py $current_assembly $out.contigs.id $contigs_nophylomark normal
 	
 }	
@@ -166,7 +170,25 @@ function run_proteins_prediction(){
 	prodigal -i $current_assembly -c -m -p meta -f gff -a $out.faa -o $out.gff -q
 }	
 
-TEMP=$(getopt -o h,a:,o: -l prefix:,chrm_db:,rna_db:,phylo_db:  -- "$@")
+function run_learning(){
+	mkdir -p $outdir/learning 
+	echo "[learnig] Use $current_assembly" 
+	echo "[learning] Run PlasFlow..." 
+	bash $BIN/all_decontamination.sh -f $current_assembly -o $outdir/learning --plasflow 70 --prefix $prefix > $outdir/log/plasmid_prediction.log 
+	mv $outdir/learning/plasflow/$prefix.plasflow0.7.plasmids.fasta $contigs_learning
+}
+
+function run_circular(){
+	mkdir -p $outdir/circular 
+	echo "[circular] Use $current_assembly" 
+	out=$outdir/circular/$prefix.circular
+	echo "[circular] Run circularization script..." 
+	bash $BIN2/run_circular.sh $current_assembly $out.fasta
+	mv $out.fasta $contigs_circular
+	
+}		
+
+TEMP=$(getopt -o h,a:,o: -l prefix:,chrm_db:,rna_db:,phylo_db:,force  -- "$@")
 eval set -- "$TEMP" 
 while true ; do 
 	case "$1" in 
@@ -192,6 +214,9 @@ while true ; do
 			PHYLO_DB=1 
 			phylo_db=$2
 			shift 2;; 
+		--force)
+			FORCE=1
+			shift ;; 
 		-h) 
 			usage 
 			shift ;;
@@ -212,32 +237,39 @@ mkdir -p $outdir/log
 mkdir -p $outdir/intermediate_contigs
 resume=$outdir/resume.tsv
 
-echo -e "step\tcontigs_number\tcontigs_length" > $resume 
+echo -e "step\tcontigs_number\tcontigs_length\tpath" > $resume 
 current_assembly=$all_contigs 
-complete_resume "All contigs" $(grep "^>" -c $current_assembly) $(python3 $BIN/total_length_fasta.py $current_assembly)
+complete_resume "All contigs" $(grep "^>" -c $current_assembly) $(python3 $BIN/total_length_fasta.py $current_assembly) $current_assembly
 
+echo "==== CLEANING PART ====" 
 echo "## STEP 1 : CHROMOSOMES ALIGNMENT" 
+start=$(date +%s) 
 verif_result $contigs_nochrm 
 if [[ $file_exist == 1 ]]; then 
 	echo "Chromosomes alignment results already exists. Use --force to overwrite" 
 else 
-	run_align_chrm
+	run_align_chrm 
 fi
-complete_resume "Contigs without chromosomes" $(grep "^>" -c $contigs_nochrm) $(python3 $BIN/total_length_fasta.py $contigs_nochrm) 
+complete_resume "Contigs without chromosomes" $(grep "^>" -c $contigs_nochrm) $(python3 $BIN/total_length_fasta.py $contigs_nochrm) $(readlink -f $contigs_nochrm)
 current_assembly=$contigs_nochrm
-
+end=$(date +%s)
+echo "Time elapsed : $((end-start)) s" 
 
 echo "## STEP 2 : rRNA SEARCH" 
+start=$(date +%s)
 verif_result $contigs_norna
 if [[ $file_exist == 1 ]]; then 
 	echo "rRNA search results already exists. Use --force to overwrite" 
 else 
 	run_rna_search
 fi
-complete_resume "Contigs without chromosomes and RNA" $(grep "^>" -c $contigs_norna) $(python3 $BIN/total_length_fasta.py $contigs_norna) 
+complete_resume "Contigs without chromosomes and RNA" $(grep "^>" -c $contigs_norna) $(python3 $BIN/total_length_fasta.py $contigs_norna) $(readlink -f $contigs_norna)
 current_assembly=$contigs_norna
+end=$(date +%s)
+echo "Time elapsed : $((end-start)) s" 
 
 echo "## STEP 3 : PHYLOGENETIC MARKERS SEARCH" 
+start=$(date +%s)
 echo "# STEP 3.1 : Proteins prediction" 
 verif_result $predicted_proteins 
 if [[ $file_exist == 1 ]]; then 
@@ -252,7 +284,36 @@ if [[ $file_exist == 1 ]]; then
 else 
 	run_phylo_markers_search 
 fi
-complete_resume "Contigs without chromosomes, RNA and phylogenetic markers" $(grep "^>" -c $contigs_nophylomark) $(python3 $BIN/total_length_fasta.py $contigs_nophylomark) 
+complete_resume "Contigs without chromosomes, RNA and phylogenetic markers" $(grep "^>" -c $contigs_nophylomark) $(python3 $BIN/total_length_fasta.py $contigs_nophylomark) $(readlink -f $contigs_nophylomark)
 current_assembly=$contigs_nophylomark
+end=$(date +%s)
+echo "Time elapsed : $((end-start)) s" 
 
+echo ""
+echo "==== PLASMID PREDICTION PART ====" 
+
+echo "## STEP 1 : PLASMID PREDICTION FROM CLEANED CONTIGS WITH LEARNING" 
+start=$(date +%s)
+verif_result $contigs_learning 
+if [[ $file_exist == 1 ]]; then 
+	echo "Plasmid prediction results already exists. Use --force to overwrite" 
+else 
+	run_learning
+fi
+complete_resume "Predict plasmids (from cleaned contigs)" $(grep "^>" -c $contigs_learning) $(python3 $BIN/total_length_fasta.py $contigs_learning) $(readlink -f $contigs_learning)
+end=$(date +%s)
+echo "Time elapsed : $((end-start)) s" 
+
+echo "## STEP 2 : CIRCULAR CONTIGS"
+start=$(date +%s)
+current_assembly=$all_contigs
+verif_result $contigs_circular  
+if [[ $file_exist == 1 ]]; then 
+	echo "Circular contigs results already exists. Use --force to overwrite" 
+else 
+	run_circular
+fi
+complete_resume "Circular contigs" $(grep "^>" -c $contigs_circular) $(python3 $BIN/total_length_fasta.py $contigs_circular) $(readlink -f $contigs_circular)
+end=$(date +%s)
+echo "Time elapsed : $((end-start)) s" 
 
