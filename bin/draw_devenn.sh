@@ -31,7 +31,7 @@ BIN2=/databis/hilpert/plasmidome_realdata2/bin
 
 python3 $BIN2/intersect_files.py $f1 $f2 results/intersect $intersect_pref $name1 $name2 	
 
-echo -e "Part\nNumber.contigs\tLength" > $outstat
+echo -e "Part\tNumber.contigs\tLength" > $outstat
 
 
 echo "# Compute $f1 total length" 
@@ -53,6 +53,14 @@ echo -e "$name1\t$n1\t$a1" >> $outstat
 echo -e "$name2\t$n2\t$a2" >> $outstat
 echo -e "$name1.$name2.common\t$n3\t$a3" >> $outstat
 
+perc1=$(echo $a1 $a3 | awk '{print $2/$1}')  
+perc2=$(echo $a2 $a3 | awk '{print $2/$1}')
+percn1=$(echo $n1 $n3 | awk '{print $2/$1}') 
+percn2=$(echo $n2 $n3 | awk '{print $2/$1}') 
+
+echo -e "Common/$name1\t$percn1\t$perc1" >> $outstat
+echo -e "Common/$name2\t$percn2\t$perc2" >> $outstat 
+ 
 echo "# Draw graph" 
 Rscript --vanilla $BIN2/draw_devenn.R $a1 $a2 $a3 $name1 $name2 $c1 $c2 $outlength $pref 2> log/$pref.R
 Rscript --vanilla $BIN2/draw_devenn.R $n1 $n2 $n3 $name1 $name2 $c1 $c2 $outnumber $pref 2> log/$pref.R
